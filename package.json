@@ -1,0 +1,26 @@
+{
+  "name": "@dhmk/redux-model",
+  "version": "0.0.1",
+  "license": "MIT",
+  "description": "Models for redux",
+  "keywords": [
+    "redux",
+    "models"
+  ],
+  "homepage": "https://github.com/dhmk083/dhmk-redux-model",
+  "bugs": "https://github.com/dhmk083/dhmk-redux-model/issues",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "files": [
+    "lib"
+  ],
+  "scripts": {
+    "preversion": "yarn build",
+    "version": "git add -A",
+    "postversion": "git push && git push --tags",
+    "build": "rm -rf lib && tsc"
+  },
+  "devDependencies": {
+    "typescript": "^4.2.3"
+  }
+}
