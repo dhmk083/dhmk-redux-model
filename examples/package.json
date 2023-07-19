@@ -1,13 +1,7 @@
 {
   "dependencies": {
-    "immer": "^9.0.1",
-    "react": "^17.0.2",
-    "react-dom": "^17.0.2",
-    "react-redux": "^7.2.3",
-    "redux": "^4.0.5",
-    "reselect": "^4.0.0"
-  },
-  "devDependencies": {
-    "@types/node": "^14.14.37"
+    "@reduxjs/toolkit": "^1.9.3",
+    "redux-logger": "^3.0.6",
+    "redux-saga": "^1.2.3"
   }
 }

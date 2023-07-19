@@ -1,344 +1,400 @@
-const TAG = Symbol();
-const ACTION_TAG = "action";
-const THUNK_TAG = "thunk";
-const ACTION_ON_TAG = "actionOn";
-const THUNK_ON_TAG = "thunkOn";
-const SELECTOR_TAG = "selector";
-const MODEL_TAG = "model";
+import { isPlainObject, mergeDeep, getIn, AnyFunction } from "@dhmk/utils";
+import { AnyAction, Middleware } from "redux";
+import { _Model, _ModelInstance } from "./common";
 
-const INITIALIZED_TAG = Symbol();
+const idSymbol = Symbol();
+const actionSymbol = Symbol();
 
-const isAction = (x) => x && x[TAG] === ACTION_TAG;
-const isThunk = (x) => x && x[TAG] === THUNK_TAG;
-const isSelector = (x) => x && x[TAG] === SELECTOR_TAG;
+let g_builderSelf;
+// let g_builderContext; // TODO?
 
-export const isModel = (x): x is Model<any> => x && x[TAG] === MODEL_TAG;
+const createId = () =>
+  Array.from({ length: 10 }, () => Math.floor(Math.random() * 10)).join("");
 
-export const merge = <T = any, P extends Partial<T> = {}>(x: P) => (o: T) =>
-  ({ ...o, ...x } as T);
+const isAction = (x) => x && x[actionSymbol];
 
-export const bind = <T, R>(selector: (state: T) => R) => (
-  self: () => T
-) => () => selector(self());
+type Exactly<T, U> = T & Record<Exclude<keyof U, keyof T>, never>;
 
-const createReducer = ({ id, config, extraActions, prefix, self }) => (
-  state,
-  action
-) => {
-  let nextState = state;
+type ReactionHelper = {
+  <T, P extends Exactly<Partial<T>, P>, A extends AnyAction>(
+    test: (a: AnyAction) => a is A,
+    fn: (a: A) => Setter<T, P>
+  ): { test: (a) => boolean; fn: (a) => Setter<T, P> };
 
-  if (state?.[INITIALIZED_TAG] !== id) {
-    nextState = reshape({ config, state, prefix, self });
-  }
+  <T, P extends Exactly<Partial<T>, P>, A extends AnyAction>(
+    test: ((a: A) => boolean) | string,
+    fn: (a: A) => Setter<T, P>
+  ): { test: (a) => boolean; fn: (a) => Setter<T, P> };
 
-  const actionHandler = self.actionHandlers[action?.type];
-  if (actionHandler) {
-    nextState = actionHandler(...action.payload)(nextState);
-  }
-
-  for (const x of extraActions) {
-    if (x.trigger(action)) {
-      nextState = x.fn(action)(nextState);
-    }
-  }
-
-  let hasChanged = state !== nextState;
-  const childrenState = {};
-
-  for (const k in self.childModels) {
-    childrenState[k] = self.childModels[k].reducer(state?.[k], action);
-    if (state && state[k] !== childrenState[k]) hasChanged = true;
-  }
-
-  nextState = hasChanged ? Object.assign({}, nextState, childrenState) : state;
-
-  if (!nextState[INITIALIZED_TAG]) nextState[INITIALIZED_TAG] = id; // safe to mutate
-  return nextState;
+  <T, P extends Exactly<Partial<T>, P>, A extends any[]>(
+    test: PrivateAction<A>,
+    fn: (a: ModelAction<A>) => Setter<T, P>
+  ): { test: (a) => boolean; fn: (a) => Setter<T, P> };
 };
 
-// mutates `self`
-function reshape({ config, state, prefix, self }) {
-  const nextState = {};
-  self.actionHandlers = {};
-  self.thunkHandlers = {};
-
-  for (const k in config) {
-    const entry = config[k];
-
-    if (isAction(entry)) {
-      self.actionHandlers[prefix + k] = entry.fn;
-
-      nextState[k] = self.typed((...args) => {
-        self.dispatch({
-          type: self.prefix + k,
-          payload: entry.prepare ? [entry.prepare(...args)] : args,
-        });
-      }, k);
-    } else if (isThunk(entry)) {
-      self.thunkHandlers[prefix + k] = entry(self);
-
-      nextState[k] = self.typed((...args) => {
-        self.dispatch({
-          type: self.prefix + k,
-          payload: args,
-        });
-      }, k);
-    } else if (isSelector(entry)) {
-      nextState[k] = entry(self);
-    } else if (isModel(entry)) {
-      if (!self.prefix) nextState[k] = entry();
-    } else {
-      nextState[k] = state && k in state ? state[k] : entry;
-    }
-  }
-
-  return nextState;
-}
-
-export function model<C>(
-  config: PrivateDefinition<C>,
-  extra?: ExtraConfig
-): Model<C> {
-  const id = {}; // unique
-  let onDetach;
-
-  const self: any = () => self.getState();
-  self.getState = () => initialState;
-  self.prefix = undefined;
-  self.dispatch = undefined;
-
-  self.childModels = {};
-  self.actionHandlers = {};
-  self.thunkHandlers = {};
-
-  const extraActions: any = [];
-  const extraThunks: any = [];
-
-  if (extra?.listeners) {
-    for (const x of extra.listeners) {
-      if (x[TAG] === ACTION_ON_TAG) {
-        extraActions.push(x);
-      } else if (x[TAG] === THUNK_ON_TAG) {
-        extraThunks.push({
-          trigger: x.trigger,
-          fn: x.fn(self),
-        });
-      }
-    }
-  }
-
-  self.typed = (fn, k) => {
-    fn.toString = () => self.prefix + k;
-    Object.defineProperty(fn, "type", { get: fn.toString });
-    return fn;
+type EffectHelper = {
+  <A extends AnyAction>(test: (a: AnyAction) => a is A, fn: (a: A) => any): {
+    test: (a) => boolean;
+    fn: (a) => any;
   };
 
-  const initialState: any = reshape({
-    config,
-    state: {},
-    prefix: undefined,
-    self,
-  });
+  <A extends AnyAction>(
+    test: ((a: A) => boolean) | string,
+    fn: (a: A) => any
+  ): { test: (a) => boolean; fn: (a) => any };
 
-  self.attach = (name, dispatch, getState) => {
-    if (self.prefix) throw new Error("already attached to " + self.prefix);
+  <A extends any[]>(test: PrivateAction<A>, fn: (a: ModelAction<A>) => any): {
+    test: (a) => boolean;
+    fn: (a) => any;
+  };
+};
 
-    self.prefix = name + "/";
-    self.dispatch = dispatch;
-    self.getState = getState;
+export type ModelAction<Args extends any[] = [], T extends string = string> = {
+  type: T;
+  payload: Args;
+};
 
-    for (const k in config) {
-      const entry = config[k];
+type ModelConfig<S> = {
+  reactions: (
+    add: ReactionHelper
+  ) => { test: (a) => boolean; fn: (a) => Setter<S, Partial<S>> }[];
 
-      if (isModel(entry)) {
-        self.childModels[k] = (entry as any).attach(
-          self.prefix + k,
-          self.dispatch,
-          () => self()[k]
+  effects: (add: EffectHelper) => { test: (a) => boolean; fn: (a) => any }[];
+
+  middleware: Middleware<{}, S>;
+
+  hydration: (raw: unknown, orig: unknown) => Partial<S>;
+};
+
+class _ActionCore<A extends any[], S = unknown> {
+  type!: string;
+  private args?: A;
+  private state?: Partial<S>;
+}
+
+const getKeys = (x) => {
+  const res: any = [];
+  for (const k in x) res.push(k);
+  return res;
+};
+
+function _createModel(state, config?) {
+  return new _Model({
+    config(fn) {
+      return _createModel(state, fn);
+    },
+
+    build(modelPath) {
+      const modelId = createId();
+      let stateId = createId();
+
+      let mwApi;
+      const api = {
+        getState() {
+          if (mwApi) return getIn(mwApi.getState(), modelPath);
+
+          return initialState;
+        },
+
+        dispatch(a) {
+          if (mwApi) return mwApi.dispatch(a);
+
+          throw new Error("model is not bound");
+        },
+      };
+
+      const self = api.getState;
+
+      const context = {
+        id: modelId,
+        path: modelPath,
+        getState() {
+          return mwApi.getState();
+        },
+        dispatch: api.dispatch,
+        // initialState
+      };
+
+      let initialState;
+
+      g_builderSelf = self;
+      const stateResult = state(self, context);
+      g_builderSelf = undefined;
+      const rawState =
+        typeof stateResult === "function"
+          ? stateResult.getInitialState()
+          : stateResult;
+
+      const {
+        reactions: _reactions = () => [],
+        effects: _effects = () => [],
+        middleware: _middleware,
+        hydration: _hydration = (x) => x,
+      } = config?.(self, context) ?? {};
+
+      const normalizedReducers = {};
+
+      function processObject(x, path) {
+        const keysAndSymbols: any[] = getKeys(x).concat(
+          Object.getOwnPropertySymbols(x) as any
         );
+
+        const res = {};
+
+        for (const xk of keysAndSymbols) {
+          if (typeof xk === "string") {
+            const xp = path.concat(xk);
+            const xv = x[xk];
+
+            if (isAction(xv)) {
+              const type = modelPath.concat(xp).join(".");
+
+              // 1. keep reducer (note side effect)
+              normalizedReducers[type] = xv;
+
+              // 2. return action creator
+              res[xk] = Object.assign(
+                (...args) =>
+                  api.dispatch({
+                    type,
+                    payload: args,
+                  }),
+                { type }
+              );
+            } else {
+              res[xk] = walk(xv, xp);
+            }
+          } else res[xk] = x[xk];
+        }
+
+        return res;
       }
-    }
 
-    onDetach = extra?.onAttach?.() || (() => {});
+      function walk(x, path: any[] = []) {
+        if (isPlainObject(x)) {
+          return processObject(x, path);
+        } else if (typeof x === "function") {
+          if (!getKeys(x).length) return x;
+          else return Object.assign(x.bind(null), processObject(x, path));
+        } else return x;
+      }
 
-    return {
-      reducer: createReducer({
-        id,
-        config,
-        extraActions,
-        prefix: self.prefix,
-        self,
-      }),
+      initialState = walk(rawState);
 
-      handleAction: (action) => {
-        const thunkHandler = self.thunkHandlers[action?.type];
-        if (thunkHandler) {
-          thunkHandler(...action.payload);
+      const addHelper = (t, fn) => ({
+        test: typeof t.type === "string" ? t.type : t,
+        fn,
+      });
+
+      const reactionsMap = {};
+      const reactionsList: any[] = [];
+      _reactions(addHelper).forEach((r: any) => {
+        if (typeof r.test === "string")
+          reactionsMap[r.test] = (reactionsMap[r.test] ?? []).concat(r.fn);
+        else reactionsList.push(r);
+      });
+
+      const mergeIfNeeded = (prev, next) => {
+        if (next[idSymbol]) return next;
+        else return { ...prev, ...next };
+      };
+
+      const reducer = (state, action) => {
+        state ??= initialState;
+
+        if (state[idSymbol] !== stateId) {
+          const unchangedState = state;
+          if (state[idSymbol]) state = JSON.parse(JSON.stringify(state));
+          state = mergeDeep(initialState, state);
+          state = { ...state, ..._hydration(state, unchangedState) };
+          stateId = state[idSymbol] = createId();
         }
 
-        for (const k in self.childModels) {
-          self.childModels[k].handleAction(action);
-        }
+        const reducer = normalizedReducers[action.type];
+        if (reducer)
+          state = mergeIfNeeded(state, reducer(...action.payload)(state));
 
-        for (const x of extraThunks) {
-          if (x.trigger(action)) {
-            x.fn(action);
+        const rs = reactionsMap[action.type];
+        if (rs)
+          state = rs.reduce(
+            (acc, r) => mergeIfNeeded(acc, r(action)(acc)),
+            state
+          );
+
+        return reactionsList.reduce(
+          (acc, r) =>
+            r.test(action) ? mergeIfNeeded(acc, r.fn(action)(acc)) : acc,
+          state
+        );
+      };
+
+      const effectsMap = {};
+      const effectsList: any[] = [];
+      _effects(addHelper).forEach((ef: any) => {
+        if (typeof ef.test === "string")
+          effectsMap[ef.test] = (effectsMap[ef.test] ?? []).concat(ef.fn);
+        else effectsList.push(ef);
+      });
+
+      let _handleMw;
+
+      return new _ModelInstance({
+        id: modelId,
+        reducer,
+        mount(api, next?) {
+          if (mwApi) throw new Error("model has already been mounted");
+
+          mwApi = api;
+
+          if (_middleware) {
+            _handleMw = _middleware(api)(next);
           }
-        }
-      },
-
-      detach: () => {
-        self.prefix = undefined;
-        self.dispatch = undefined;
-        self.getState = () => initialState;
-
-        for (const k in self.childModels) {
-          self.childModels[k].detach();
-        }
-        self.childModels = {};
-
-        onDetach();
-      },
-    };
-  };
-
-  self[TAG] = MODEL_TAG;
-  return self;
+        },
+        dispose() {
+          mwApi = undefined;
+        },
+        handleAction(a) {
+          const efs = effectsMap[a?.type];
+          efs && efs.forEach((ef) => ef(a));
+          effectsList.forEach((ef) => ef.test(a) && ef.fn(a));
+        },
+        handleMw: _middleware ? (a) => _handleMw(a) : undefined,
+      });
+    },
+  }) as any;
 }
 
-type Brand<T, B> = T & { __brand: B };
+export function createModelAction<Args extends any[]>(
+  type
+): ((...args: Args) => ModelAction<Args>) & PrivateAction<Args> {
+  return Object.assign(
+    (...args: Args) => ({
+      type,
+      payload: args,
+    }),
+    { type }
+  );
+}
 
-enum PrivateTag {}
-export type Private<T> = Brand<T, PrivateTag>;
+type Builder<T> = (() => Self<T>) & Model<T> & { public: () => T };
 
-export type Model<T> = {
-  (): Instance<T>;
+class _ModelCore<T> {
+  private __modelTag?: T;
+}
+
+export type Model<T> = _ModelCore<T>;
+
+export type ConfigurableModel<T> = Model<T> & {
+  config: <K extends Partial<ModelConfig<T>>>(
+    fn: (self: () => Self<T>, ctx: Context) => K
+  ) => Model<T>;
 };
 
-type PrivateModel<T> = {
-  (): PrivateInstance<T>;
+export type PrivateAction<A extends any[] = [], S = unknown> = _ActionCore<
+  A,
+  S
+>;
+
+export type Action<A extends any[] = [], S = unknown> = ((...args: A) => void) &
+  PrivateAction<A, S>;
+
+type Setter<S, U> = ((s: S) => S) | ((s: S) => U);
+
+type ActionCreator<S> = <A extends any[], U extends Exactly<Partial<S>, U>>(
+  fn: (...args: A) => Setter<S, U>
+) => Action<A, S>;
+
+type PrivateActionCreator<S> = <
+  A extends any[],
+  U extends Exactly<Partial<S>, U>
+>(
+  fn: (...args: A) => Setter<S, U>
+) => PrivateAction<A, S>;
+
+export function build<A, B>(
+  a: A,
+  b?: (a: ActionCreator<A>, pa: PrivateActionCreator<A>) => B
+): Builder<A & B> {
+  if (!g_builderSelf)
+    throw new Error(
+      "`build` must be called synchronously inside `create` function"
+    );
+
+  const self = g_builderSelf;
+
+  const initialState = { ...a, ...b?.(action, action) };
+
+  const builder = () => self() ?? initialState;
+  builder.getInitialState = () => initialState;
+  builder.public = builder;
+
+  return builder;
+}
+
+type InferOut<T> = T extends Model<infer M> ? M : never;
+
+export type StateOf<T> = T extends Model<infer M> ? M : unknown;
+
+type AllowMore<A extends any[]> = [...A, ...unknown[]];
+
+export type ActionMatcher<A extends any[] = []> = PrivateAction<AllowMore<A>>;
+
+export type Context = {
+  id: string;
+  path: ReadonlyArray<string>;
+  getState(): unknown;
+  dispatch(a: AnyAction): unknown;
 };
 
-export type Instance<T> = {
-  [P in keyof T]: T[P] extends Private<unknown>
-    ? never
-    : T[P] extends Action<infer T, infer A, any>
-    ? (...args: A) => Instance<T>
-    : T[P] extends Thunk<any, infer A, infer R>
-    ? (...args: A) => R
-    : T[P] extends Selector<any, infer A, infer R>
-    ? (...args: A) => R
-    : T[P] extends Model<infer M>
-    ? Instance<M>
+export function createModel<T extends Builder<unknown>>(
+  state: () => T
+): ConfigurableModel<InferOut<T>>;
+export function createModel<T>(
+  state: (self: () => Self<T>, ctx: Context) => Bind<T, T>
+): ConfigurableModel<T>;
+export function createModel(state) {
+  return _createModel(state);
+}
+
+export function action<A extends any[], S>(
+  fn: (...args: A) => (s: S) => Partial<S>
+): Action<A, S> {
+  return Object.assign(fn.bind(null), { [actionSymbol]: true }) as any;
+}
+
+export function _<T>(x: T): T {
+  return x;
+}
+
+type Self<T> = {
+  [P in keyof T]: T[P] extends PrivateAction<infer A, infer S>
+    ? Action<A, S>
+    : T[P] extends object
+    ? T[P] & Self<T[P]>
     : T[P];
 };
 
-export type PrivateInstance<T> = {
-  [P in keyof T]: T[P] extends Private<infer Q>
-    ? Q extends Action<infer T, infer A, any>
-      ? (...args: A) => PrivateInstance<T>
-      : Q extends Thunk<any, infer A, infer R>
-      ? (...args: A) => R
-      : Q extends Selector<any, infer A, infer R>
-      ? (...args: A) => R
-      : Q extends Model<infer T>
-      ? PrivateInstance<T>
-      : Q
-    : T[P] extends Action<infer T, infer A, any>
-    ? (...args: A) => PrivateInstance<T>
-    : T[P] extends Thunk<any, infer A, infer R>
-    ? (...args: A) => R
-    : T[P] extends Selector<any, infer A, infer R>
-    ? (...args: A) => R
-    : T[P] extends PrivateModel<infer M>
-    ? PrivateInstance<M>
+type Bind<T, S> = {
+  [P in keyof T]: T[P] extends PrivateAction<infer A, unknown>
+    ? PrivateAction<A, S>
+    : T[P] extends Action<infer A, unknown>
+    ? Action<A, S>
+    : T[P] extends Attach<infer A, infer B>
+    ? keyof B extends never
+      ? T[P]
+      : Attach<A, Bind<B, S>>
+    : T[P] extends object
+    ? Bind<T[P], S>
     : T[P];
 };
 
-type PrivateDefinition<T> = {
-  [P in keyof T]: T[P] extends Private<infer Q> ? Q : T[P];
-};
+export type Attach<A extends AnyFunction, B extends object> = A & B;
 
-type ExtraConfig = {
-  onAttach?: () => (() => any) | void;
-  listeners?: ReadonlyArray<ActionOn<any> | ThunkOn<any>>;
-};
-
-export type Action<T = any, A extends any[] = [], P = void> = P extends void
-  ? {
-      fn: (...args: A) => (state: PrivateInstance<T>) => PrivateInstance<T>;
-      [TAG]: typeof ACTION_TAG;
-    }
-  : {
-      prepare: (...args: A) => P;
-      fn: (arg: P) => (state: PrivateInstance<T>) => PrivateInstance<T>;
-      [TAG]: typeof ACTION_TAG;
-    };
-
-export function action<T = any, A extends any[] = []>(
-  fn: (...args: A) => (state: PrivateInstance<T>) => PrivateInstance<T>
-): Action<T, A, void>;
-export function action<T, A extends any[] = any, P = void>(
-  prepare: (...args: A) => P,
-  fn: (arg: P) => (state: PrivateInstance<T>) => PrivateInstance<T>
-): Action<T, A, P>;
-export function action(f1, f2?: any) {
-  return {
-    prepare: f2 ? f1 : undefined,
-    fn: f2 ? f2 : f1,
-    [TAG]: ACTION_TAG,
-  } as any;
+export function attach<A extends AnyFunction, B extends object>(
+  a: A,
+  b: B
+): Attach<A, B> {
+  return Object.assign(a, b);
 }
 
-export type Thunk<T = any, A extends any[] = [], R = any> = (
-  self: PrivateModel<T>
-) => (...args: A) => R;
-
-export const thunk = <T = any, A extends any[] = [], R = any>(
-  fn: (self: PrivateModel<T>) => (...args: A) => R
-): Thunk<T, A, R> => {
-  fn[TAG] = THUNK_TAG;
-  return fn;
-};
-
-// like Thunk, but supposed to be pure
-export type Selector<T = any, A extends any[] = [], R = any> = (
-  self: PrivateModel<T>
-) => (...args: A) => R;
-
-export const selector = <T = any, A extends any[] = [], R = any>(
-  fn: (self: PrivateModel<T>) => (...args: A) => R
-): Selector<T, A, R> => {
-  fn[TAG] = SELECTOR_TAG;
-  return fn;
-};
-
-export type ActionOn<T = any, A = any> = {
-  trigger: (action: any) => boolean;
-  fn: (action: A) => (state: PrivateInstance<T>) => PrivateInstance<T>;
-  [TAG]: typeof ACTION_ON_TAG;
-};
-
-export const actionOn = <T = any, A = any>(
-  trigger: (action: any) => boolean,
-  fn: (action: A) => (state: PrivateInstance<T>) => PrivateInstance<T>
-): ActionOn<T, A> => ({
-  trigger,
-  fn,
-  [TAG]: ACTION_ON_TAG,
-});
-
-export type ThunkOn<T = any, A = any> = {
-  trigger: (action: any) => boolean;
-  fn: (self: PrivateModel<T>) => (action: A) => any;
-  [TAG]: typeof THUNK_ON_TAG;
-};
-
-export const thunkOn = <T = any, A = any>(
-  trigger: (action: any) => boolean,
-  fn: (self: PrivateModel<T>) => (action: A) => any
-): ThunkOn<T, A> => ({
-  trigger,
-  fn,
-  [TAG]: THUNK_ON_TAG,
-});
+export const isModel = (x) => x instanceof _Model;

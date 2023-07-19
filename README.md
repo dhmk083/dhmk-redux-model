@@ -1,231 +1,310 @@
 # redux-model
 
-Inspired by an awesome [easy-peasy](https://github.com/ctrlplusb/easy-peasy). Define self-contained models with methods on them and use without dispatch. Zero dependencies. Built on top of redux and compatible with it.
+Library that helps you to write concise and boilerplate-free models for redux store.
 
-1. Install:
+Inspired by [easy-peasy](https://github.com/ctrlplusb/easy-peasy) and [zustand](https://github.com/pmndrs/zustand).
 
+## Install
+
+```sh
+npm install @dhmk/redux-model
 ```
-yarn add @dhmk/redux-model redux react-redux
-```
 
-2. Create models:
+## Examples
 
-```ts
-import * as m from "@dhmk/redux-model";
-import produce from "immer"; // Optional. You can use any similar library or write reducer by yourself
+[Complete example](https://github.com/dhmk083/dhmk-redux-model/blob/main/examples/complete.ts)
 
-interface Todo {
-  id: number;
-  text: string;
-  completed: boolean;
-}
+### Javascript
 
-interface Todos {
-  byId: Record<number, Todo>;
-  allIds: number[];
-
-  getTodos: m.Selector<Todos, [], Todo[]>;
-
-  toggle: m.Action<Todos, [id: number]>;
-
-  add: m.Action<Todos, [text: string], { text: string; id: number }>;
-}
-
-const todos = m.model<Todos>({
-  byId: {},
-  allIds: [],
-
-  getTodos: m.selector((self) => () =>
-    self().allIds.map((id) => self().byId[id])
-  ),
-
-  // action is a pure function
-  toggle: m.action((id) =>
-    produce((state) => {
-      state.byId[id].completed = !state.byId[id].completed;
+```js
+const modelA = createModel((self) => ({
+  value: 0,
+  increment: action(() => (s) => ({ value: s.value + 1 })),
+  decrement: action(() =>
+    produce((s) => {
+      s.value--;
     })
   ),
+  incrementAsync: () => {
+    setTimeout(() => self().increment());
+  },
+}));
 
-  // when an action needs to run side-effects
-  // use a two step definition
-  add: m.action(
-    (text: string) => ({ text, id: Math.random() }), // action side-effects are placed here
-    ({ text, id }) =>
-      produce((state) => {
-        state.allIds.push(id);
-        state.byId[id] = { id, text, completed: false };
-      })
+const modelB = createModel(...)
+
+const root = createRoot({
+  modelA,
+  modelB,
+})
+
+const store = createStore(root.reducer, root.enhacer)
+```
+
+### Typescript
+
+```ts
+interface Counter {
+  value: number;
+  increment: Action;
+  decrement: Action;
+  incrementAsync: () => void;
+}
+
+const model = createModel<Counter>((self) => ({
+  value: 0,
+  increment: action(() => (s) => ({ value: s.value + 1 })),
+  decrement: action(() =>
+    produce((s) => {
+      s.value--;
+    })
   ),
+  incrementAsync: () => {
+    setTimeout(() => self().increment());
+  },
+}));
+```
+
+If you're not a fan of writing types, you can use a builder helper.
+
+**NOTE:** you will probably need another helper: `_`. See details later.
+
+```ts
+const model = createModel(() => {
+  const self = build(
+    {
+      value: 0,
+    },
+    (action) => ({
+      increment: action(() => (s) => ({ value: s.value + 1 })),
+      decrement: action(() =>
+        produce((s) => {
+          s.value--;
+        })
+      ),
+      incrementAsync: () => {
+        setTimeout(() => self().increment());
+      },
+    })
+  );
+
+  return self;
 });
 ```
 
-3. Create store:
+### Usage with `createStore` function
 
 ```ts
-import { createStore } from "redux";
-import { createModelsStore } from "../../src";
+const root = createRoot(...)
 
-import models from "./models";
-
-export const store = createModelsStore(createStore)(
-  models /*, optional enhancer */
-);
-
-// hot reloading
-if (process.env.NODE_END === "development" && (module as any).hot) {
-  (module as any).hot.accept("./models", () => {
-    store.replaceModels(require("./models").default);
-  });
-}
+const store = createStore(root.reducer, root.enhacer)
 ```
 
-4. Use it the same way as with plain redux:
+### Usage with `configureStore` function (from redux-toolkit)
 
 ```ts
-import { useSelector } from "react-redux";
+const root = createRoot(...)
 
-const App = () => {
-  const todos = useSelector((state) => state.todos);
+const store = configureStore({
+  reducer: root.reducer,
+  enhancers: (e) => [root.enhancer].concat(e), // root.enhancer must come first
+  middleware: (m) => m({ serializableCheck: false }) // need to turn this off, because we have functions in state
+})
+```
 
-  const [text, setText] = React.useState("");
+## API
 
-  return (
-    <div>
-      <form
-        onSubmit={(ev) => {
-          ev.preventDefault();
-          if (!text.trim()) return;
+### `createModel((self, context) => state)`
 
-          todos.add(text.trim());
-          setText("");
-        }}
-      >
-        <input value={text} onChange={(ev) => setText(ev.target.value)} />
-        <button>Add Todo</button>
-      </form>
+Takes a function which should return model's initial state. It's called with two arguments: a getter function which returns current model state in store and a context object. The context object has the following properties:
 
-      <ul>
-        {todos.getTodos().map((todo) => (
-          <li
-            key={todo.id}
-            onClick={() => todos.toggle(todo.id)}
-            style={{
-              textDecoration: todo.completed ? "line-through" : "inherit",
-            }}
-          >
-            {todo.text}
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
+#### `context`
+
+- `id` - unique model id
+
+- `path` - array of string keys that defines location of the model state within global store state
+
+- `dispatch` - store dispatch function
+
+- `getState` - store getState function
+
+#### `config((self, context) => config)`
+
+You can add extra configuration for a model by using its `config` method.
+
+- `reactions(add => [])`
+
+Reactions are run synchronously after actions. Matcher can be a predicate function or a string type. If it returns `true` then reaction is invoked.
+
+- `effects(add => [])`
+
+Effects are run synchronously after an action has been dispatched and after all middleware, before returning result of the dispatched action. Matcher can be a predicate function or a string type. It it returns `true` then effect is invoked.
+
+> Reactions and effects can utilize `ActionMatcher` type. For example:
+
+```ts
+declare const externalAction: ActionMatcher<[number]>
+...
+reactions: add => [
+  add(externalAction, (action) => {
+    // payload will be inferred as [number]
+  })
+]
+...
+```
+
+- `hydration((mergedState, providedState) => nextState)`
+
+Each model state gets a unique id upon creation. Whenever model's reducer receives a state argument with a different id (or undefined state), this function is called. The first argument is a new deeply merged state (model's initial state and the provided state) and the second argument is the provided state. It should return a full state object, which will be used then.
+
+- `middleware(({dispatch, getState}) => next => action)`
+
+Redux middleware localized to model. It means that `getState` returns model's state, not global.
+
+> Example for redux-saga:
+
+```ts
+middleware: (api) => (next) => {
+  function* saga() {
+    yield takeEvery(self().increment.type, (action) => {
+      console.log("action", action);
+    });
+  }
+
+  const mw = createSagaMiddleware();
+  const handler = mw(api)(next);
+  mw.run(saga);
+  return handler;
 };
 ```
 
-See [examples](examples) for more.
+### `action((...args) => state => partialState)`
 
-# API
+Declares an action and reducer pair. Must be pure.
 
-- createModelsStore(createStore)(models, enhancer?): ModelsStore
+### `build(stateA, (action, privateAction) => stateB)`
 
-  `ModelsStore` is like a regualr redux store without `replaceReducer` method and with the following methods:
+Typescript helper. Must be called synchronously inside `createModel` function.
 
-  - addModel(name, model)
-  - removeModel(name)
-  - replaceModels(models)
+### `_(state => partialState)`
 
-- model(config, extra?): Model
+Workaround wrapper for typescript. It's necessary if your action has any parameters.
 
-  `Model` is a function that returns model state:
+```ts
+action((name: string) => (s) => s); // () => void
+action((name: string) => _((s) => s)); // (name: string) => void
+```
 
-  ```js
-  const myModel = model({ id: 123, name: "model" });
-  const { id, name } = myModel();
-  ```
+### `createRoot(models)`
 
-- model's `extra` argument:
+Takes an object with models and creates reducer and enhacer. It also returns `getState` function, so you can use it to create connections between models:
 
-  ```ts
-  {
-    onAttach: Function; // will be called when model is attached to store, may return a dispose function
-    listeners: [ActionOn | ThunkOn]; // see below
-  }
-  ```
+```ts
+const { getState } = createRoot({
+  modelA: createModelA(),
+  modelB: createModelB(() => getState().modelA.property),
+});
+```
 
-- action((...args) => state => nextState)
+### `createStore(reducer, initialState?, enhancer?)`
 
-  This is actually an ordinary case reducer.
-  Under the hood it compiles to action-reducer pair.
-  Use it to modify state.
-  Should be pure.
-  It has a curried form only for convenience, both outer and inner functions are called atomically.
+Minimal redux store. It has no checks and warnings which original redux store has. Also, it misses observable symbol.
 
-- action((...args) => newArgs, newArgs => state => nextState)
+### `attach(fn, obj)`
 
-  An overload which enables side effects that will be applied before calling redux `dispatch()` function
+Typescript helper. Alias for `Object.assign`. Use it together with `Attach` type. It allows for this handy pattern:
 
-- thunk(self => (...args) => any)
+```ts
+...
+load: Attach<(id: number) => Promise<void>, {
+  request: Action
+  resolve: Action<[Data]>
+  failure: Action<[Error]>
+}>
+...
 
-  For side-effects.
-  Has a type.
-  Dispatched like an ordinary action, thus can be tracked in debug tools.
-  Outer function will be called once at initialization.
+...
+load: attach((id) => {...}, {
+  request: ...
+  resolve: ...
+  failure: ...
+})
+...
 
-- selector(self => (...args) => any)
+// then use it like this:
+self().load(1)
+self().load.request()
+...
+```
 
-  Supposed to be pure.
-  Outer function will be called once at initialization.
+### `remountAction`
 
-- actionOn(action => boolean, action => state => nextState)
+This action dispatches after root models were changed (after binding to store or calling `.update()` method). It has a single argument - an object with two maps of mounted and unmounted ids of models:
 
-  Modify state on action.
-  Called after regular action handler.
+```ts
+ModelAction<
+  [
+    {
+      mount: Record<string, true>;
+      unmount: Record<string, true>;
+    }
+  ]
+>;
+```
 
-- thunkOn(action => boolean, self => action => any)
+### `onMount(ctx)`
 
-  Perform side-effect on action.
-  Outer function will be called once at initialization.
+### `onUnmount(ctx)`
 
-- merge(partialState)
+Helper predicates for reactions/effects. Example:
 
-  Helper to convert this:
+```ts
+createModel(...).config((self, ctx) => ({
+  reactions: add => [
+    add(onMount(ctx), a => {
+      // a is remountAction
+    })
+  ],
+  effects: add => [
+    add(onUnmount(ctx), a => {
+      // a is remountAction
+    })
+  ]
+}))
+```
 
-  ```js
-  action((arg) => (state) => ({ ...state, arg }));
-  ```
+## Types
 
-  to this:
+### `PrivateAction<Args, State?>`
 
-  ```js
-  action((arg) => merge({ arg }));
-  ```
+Core action type. It's uncallable and only has `type` property that is a string.
 
-- bind
+### `Action<Args, State?>`
 
-  Helper to convert this:
+Extends `PrivateAction` and makes it callable.
 
-  ```js
-  selector((self) => {
-    const sel = createSelector(
-      (state) => state.allIds,
-      (state) => state.byId,
-      (ids, byId) => ids.map((id) => byId[id])
-    );
+### `StateOf<T>`
 
-    return () => sel(self());
-  });
-  ```
+Returns state of a model
 
-  to this:
+### `ModelAction<Args>`
 
-  ```js
-  selector(
-    bind(
-      createSelector(
-        (state) => state.allIds,
-        (state) => state.byId,
-        (ids, byId) => ids.map((id) => byId[id])
-      )
-    )
-  );
-  ```
+Declares an action type which payload has Args type.
+
+### `ActionMatcher<Args>`
+
+Declares a type which matches actions with compatible parameters. For example:
+
+```ts
+declare const a1: Action;
+declare const a2: Action<[number]>;
+declare const a3: Action<[number, string]>;
+declare const a4: Action<[string]>;
+
+// expects an action which has at least one parameter of type `number`.
+declare function test(a: ActionMatcher<[number]>);
+
+test(a1); // error
+test(a2); // ok
+test(a3); // ok
+test(a4); // error
+```
