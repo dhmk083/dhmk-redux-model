@@ -2,12 +2,12 @@ import { configureStore } from "@reduxjs/toolkit";
 import createSagaMiddleware from "redux-saga";
 import { takeEvery } from "redux-saga/effects";
 import logger from "redux-logger";
+import { produce } from "immer";
 
 import {
   createModel,
   createRoot,
   build,
-  _,
   Action,
   PrivateAction,
   ActionMatcher,
@@ -22,9 +22,7 @@ import {
 // Use it in helper functions, which will be later composed inside createModel.
 const createSimpleCounter = () =>
   build({ value: 0 }, (action, privateAction) => ({
-    increment: action((step: number = 1) =>
-      _((s) => ({ value: s.value + step }))
-    ),
+    increment: action((step: number = 1) => (s) => ({ value: s.value + step })),
     reset: privateAction(() => () => ({ value: 0 })),
   })).public();
 
@@ -67,11 +65,15 @@ const modelA = createModel<ModelA>((self) => ({
 const modelB = (reset: ActionMatcher) =>
   createModel(() => {
     const self = build(createSimpleCounter(), (action, privateAction) => ({
-      someAction: action(() => () => ({ value: 1 })),
+      someAction: action(() =>
+        produce((d) => {
+          d.value = 123;
+        })
+      ),
       load: Object.assign(async (n: number) => {}, {
         request: privateAction(() => (s) => s),
-        success: privateAction((data: number) => _((s) => s)),
-        failure: privateAction((error: Error) => _((s) => s)),
+        success: privateAction((data: number) => (s) => s),
+        failure: privateAction((error: Error) => (s) => s),
       }),
     }));
 
