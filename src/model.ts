@@ -68,8 +68,8 @@ type ModelConfig<S> = {
 
 class _ActionCore<A extends any[], S = unknown> {
   type!: string;
-  private args?: A;
-  private state?: Partial<S>;
+  protected args?: A;
+  protected state?: Partial<S>;
 }
 
 const getKeys = (x) => {
@@ -279,7 +279,7 @@ export function createModelAction<Args extends any[]>(
 type Builder<T> = (() => Self<T>) & Model<T> & { public: () => T };
 
 class _ModelCore<T> {
-  private __modelTag?: T;
+  protected __modelTag?: T;
 }
 
 export type Model<T> = _ModelCore<T>;
