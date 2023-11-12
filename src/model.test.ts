@@ -223,3 +223,53 @@ function createRootFromModel(model) {
     },
   };
 }
+
+it("nested", () => {
+  const counter = createModel(() => {
+    const self = build({ value: 0 }, (action) => ({
+      incrementAction: action(() => (s) => ({ value: s.value + 1 })),
+      increment() {
+        // to test both `action` and `self`
+        self().incrementAction();
+      },
+    }));
+
+    return self;
+  });
+
+  const root = createRoot({
+    one: counter,
+    two: {
+      a: counter,
+      b: {
+        b1: counter,
+      },
+    },
+  });
+
+  const store = createStore(root.reducer, root.enhancer);
+
+  expect(store.getState()).toMatchObject({
+    one: { value: 0 },
+    two: {
+      a: { value: 0 },
+      b: {
+        b1: { value: 0 },
+      },
+    },
+  });
+
+  store.getState().one.increment();
+  store.getState().two.a.increment();
+  store.getState().two.b.b1.increment();
+
+  expect(store.getState()).toMatchObject({
+    one: { value: 1 },
+    two: {
+      a: { value: 1 },
+      b: {
+        b1: { value: 1 },
+      },
+    },
+  });
+});

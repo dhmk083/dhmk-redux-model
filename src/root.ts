@@ -88,10 +88,8 @@ export function createRoot(configTree) {
             enumerable: true,
             configurable: true,
           });
-        } else if (isPlainObject(x[k])) {
-          result[k] = createModelsTree(x[k], path.concat(k));
         } else {
-          result[k] = createModelsTree(x[k], path);
+          result[k] = createModelsTree(x[k], path.concat(k));
         }
       }
 
