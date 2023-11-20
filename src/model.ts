@@ -69,8 +69,10 @@ type ModelConfig<S> = {
 class _ActionCore<A extends any[], S = unknown> {
   type!: string;
   protected args?: A;
-  protected state?: Partial<S>;
+  protected state?: (s: S) => void;
 }
+
+export type ActionCore<A extends any[], S = unknown> = _ActionCore<A, S>;
 
 const getKeys = (x) => {
   const res: any = [];
@@ -276,7 +278,7 @@ export function createModelAction<Args extends any[]>(
   );
 }
 
-type Builder<T> = (() => Self<T>) & Model<T> & { public: () => T };
+type Builder<T> = (() => Private<T>) & Model<T>;
 
 class _ModelCore<T> {
   protected __modelTag?: T;
@@ -286,32 +288,44 @@ export type Model<T> = _ModelCore<T>;
 
 export type ConfigurableModel<T> = Model<T> & {
   config: <K extends Partial<ModelConfig<T>>>(
-    fn: (self: () => Self<T>, ctx: Context) => K
+    fn: (self: () => Private<T>, ctx: Context) => K
   ) => Model<T>;
 };
 
-export type PrivateAction<A extends any[] = [], S = unknown> = _ActionCore<
+export type PrivateAction<A extends any[] = [], S = unknown> = ActionCore<
   A,
   S
->;
+> & { __private?: true };
 
 export type Action<A extends any[] = [], S = unknown> = ((...args: A) => void) &
-  PrivateAction<A, S>;
+  ActionCore<A, S>;
 
-type Setter<S, U> = ((s: S) => S) | ((s: S) => U);
+export type Setter<S, U> = ((s: S) => S) | ((s: S) => U);
 
-type ActionCreator<S> = <A extends any[], U extends Exactly<Partial<S>, U>>(
+export type ActionCreator<S> = <
+  A extends any[],
+  U extends Exactly<Partial<S>, U>
+>(
   fn: (...args: A) => Setter<S, U>
 ) => Action<A, S>;
 
-type PrivateActionCreator<S> = <
+export type PrivateActionCreator<S> = <
   A extends any[],
   U extends Exactly<Partial<S>, U>
 >(
   fn: (...args: A) => Setter<S, U>
 ) => PrivateAction<A, S>;
 
-export function build<A, B>(
+// ensures that actions are compatible with `S` state
+type CheckActions<T, S> = {
+  [P in keyof T]: T[P] extends ActionCore<infer A>
+    ? ActionCore<A, S>
+    : T[P] extends object
+    ? CheckActions<T[P], S>
+    : T[P];
+};
+
+export function build<A, B extends CheckActions<B, A & B>>(
   a: A,
   b?: (a: ActionCreator<A>, pa: PrivateActionCreator<A>) => B
 ): Builder<A & B> {
@@ -322,16 +336,13 @@ export function build<A, B>(
 
   const self = g_builderSelf;
 
-  const initialState = { ...a, ...b?.(action, action) };
+  const initialState = mergeDeep<any>(a, b?.(action, action) ?? {});
 
   const builder = () => self() ?? initialState;
   builder.getInitialState = () => initialState;
-  builder.public = builder;
 
   return builder;
 }
-
-type InferOut<T> = T extends Model<infer M> ? M : never;
 
 export type StateOf<T> = T extends Model<infer M> ? M : unknown;
 
@@ -348,10 +359,10 @@ export type Context = {
 
 export function createModel<T extends Builder<unknown>>(
   state: () => T
-): ConfigurableModel<InferOut<T>>;
+): ConfigurableModel<Public<StateOf<T>>>;
 export function createModel<T>(
-  state: (self: () => Self<T>, ctx: Context) => Bind<T, T>
-): ConfigurableModel<T>;
+  state: (self: () => Private<T>, ctx: Context) => Bind<T, T>
+): ConfigurableModel<Public<T>>;
 export function createModel(state) {
   return _createModel(state);
 }
@@ -366,11 +377,23 @@ export function _<T>(x: T): T {
   return x;
 }
 
-type Self<T> = {
-  [P in keyof T]: T[P] extends PrivateAction<infer A, infer S>
-    ? Action<A, S>
+// ensures that private actions are uncallable
+export type Public<T> = {
+  [P in keyof T]: T[P] extends Action<any, any> & { __private?: false } // T[P] is not PrivateAction
+    ? T[P]
+    : T[P] extends PrivateAction<infer A, infer S>
+    ? PrivateAction<A, S>
     : T[P] extends object
-    ? T[P] & Self<T[P]>
+    ? (T[P] extends Function ? T[P] : {}) & Public<T[P]>
+    : T[P];
+};
+
+// makes private actions callable
+export type Private<T> = {
+  [P in keyof T]: T[P] extends PrivateAction<infer A, infer S>
+    ? Action<A, S> & T[P] // keep T[P] to distinguish private actions
+    : T[P] extends object
+    ? T[P] & Private<T[P]>
     : T[P];
 };
 

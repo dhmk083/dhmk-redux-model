@@ -18,13 +18,13 @@ import {
   onUnmount,
 } from "../src";
 
-// Using build(...).public() preserves private actions in return type.
-// Use it in helper functions, which will be later composed inside createModel.
+// you can create helper functions, which will be later composed inside `createModel`
+// since `build` may be called only inside `createModel` we must wrap it in a function
 const createSimpleCounter = () =>
   build({ value: 0 }, (action, privateAction) => ({
     increment: action((step: number = 1) => (s) => ({ value: s.value + step })),
     reset: privateAction(() => () => ({ value: 0 })),
-  })).public();
+  }))(); // call it to return an object, rather than a function that returns the object
 
 interface ModelA {
   value: number;
@@ -77,7 +77,7 @@ const modelB = (reset: ActionMatcher) =>
       }),
     }));
 
-    // calling self.public() is not required here, because we return a builder function
+    // you can return either `self` function or `self()` object
     return self;
   }).config((self) => ({
     reactions: (add) => [add(reset, () => () => ({ value: 0 }))],
@@ -121,8 +121,8 @@ const store = configureStore({
 
 // unload `modelB` - it will be replaced with `null` in global state
 // and `remount` action will be dispatched
-// root.update({ modelB: null })
+root.update({ modelB: null });
 
 // load `modelB` - it will be replaced with another instance of `modelB`
 // and `remount` action will be dispatched
-// root.update({ modelB: modelB(root.getState().modelA.reset) })
+root.update({ modelB: modelB(root.getState().modelA.reset) });

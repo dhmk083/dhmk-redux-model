@@ -58,7 +58,7 @@ it("build", async () => {
       incrementAsync: async () => self().increment(),
     }));
 
-    return self.public();
+    return self();
   };
 
   const model = createModel(() => {

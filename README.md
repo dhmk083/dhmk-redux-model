@@ -66,8 +66,6 @@ const model = createModel<Counter>((self) => ({
 
 If you're not a fan of writing types, you can use a builder helper.
 
-**NOTE:** you will probably need another helper: `_`. See details later.
-
 ```ts
 const model = createModel(() => {
   const self = build(
@@ -184,15 +182,6 @@ Declares an action and reducer pair. Must be pure.
 ### `build(stateA, (action, privateAction) => stateB)`
 
 Typescript helper. Must be called synchronously inside `createModel` function.
-
-### `_(state => partialState)`
-
-Workaround wrapper for typescript. It's necessary if your action has any parameters.
-
-```ts
-action((name: string) => (s) => s); // () => void
-action((name: string) => _((s) => s)); // (name: string) => void
-```
 
 ### `createRoot(models)`
 
