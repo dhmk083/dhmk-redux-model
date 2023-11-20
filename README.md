@@ -261,6 +261,10 @@ createModel(...).config((self, ctx) => ({
 }))
 ```
 
+### `createActions<S>()((action, privateAction) => actionsOnly)`
+
+Helper to define actions bound to state `S`.
+
 ## Types
 
 ### `PrivateAction<Args, State?>`

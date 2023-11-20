@@ -421,3 +421,21 @@ export function attach<A extends AnyFunction, B extends object>(
 }
 
 export const isModel = (x) => x instanceof _Model;
+
+type OnlyActions<T, S> = {
+  [P in keyof T]: T[P] extends ActionCore<any, S>
+    ? T[P]
+    : T[P] extends Function
+    ? never
+    : T[P] extends object
+    ? OnlyActions<T[P], S>
+    : never;
+};
+
+export function createActions<S>() {
+  return function <T extends OnlyActions<T, S>>(
+    fn: (a: ActionCreator<S>, pa: PrivateActionCreator<S>) => T
+  ): Private<T> {
+    return fn(action, action as any) as any;
+  };
+}
